@@ -3,11 +3,13 @@
 # ISIR/MLIA, 2023
 # Crédits : https://towardsdatascience.com/text-classification-with-bert-in-pytorch-887965e5820f
 
+# Authorship attribution with BERT
 
+
+import argparse
 import numpy as np
 import pandas as pd
 import torch
-from sklearn import preprocessing
 from torch import nn
 from torch.optim import Adam
 from torch.utils.data import Dataset, DataLoader
@@ -15,8 +17,8 @@ from tqdm import tqdm
 from transformers import BertTokenizer, BertModel
 
 
-def load_data(n_authors=2, dt_dir='./'):
-    users_output_df = pd.read_csv(dt_dir + 'users_output.csv', index_col=0)
+def load_data(n_authors=2, data_path='./users_output.csv'):
+    users_output_df = pd.read_csv(data_path, index_col=0)
     users_output_df = users_output_df.rename({'target': 'review'}, axis=1)
     users_output_df = users_output_df[['review', 'movieID', 'userID']]
     users_output_df = users_output_df[users_output_df['userID'] != 'u/nan']
@@ -103,7 +105,7 @@ class BertClassifier(nn.Module):
         return final_layer
 
 
-def train(model, train_df, eval_df, lr=1e-6, epochs=5, batch_size=8):
+def train(model, train_df, eval_df, lr=1e-6, epochs=5, batch_size=8, model_path='bert_authorship.pt'):
     tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
 
     train_dt = AuthorshipDataset(train_df, tokenizer)
@@ -168,8 +170,8 @@ def train(model, train_df, eval_df, lr=1e-6, epochs=5, batch_size=8):
             f'| Val Loss: {total_loss_eval / len(eval_dt): .3f} ' +
             f'| Val Accuracy: {total_acc_eval / len(eval_dt): .3f}')
 
-        torch.save(model.state_dict(), f'bert_authorship_{model._n_authors}.pt')
-        print(f'[Model] Saving model at bert_authorship_{model._n_authors}.pt')
+        torch.save(model.state_dict(), model_path)
+        print(f'[Model] Saving model at {model_path}')
 
 
 def evaluate(model, test_df, batch_size=8):
@@ -200,20 +202,41 @@ def evaluate(model, test_df, batch_size=8):
     print(f'[Test] Test Accuracy: {total_acc_test / len(test_dt): .3f}')
 
 
-def main():
-    lr=1e-6
-    epochs=20
-    batch_size=8
-    n_authors=2
-    train_df, test_df, eval_df = load_data(n_authors)
+def main(args):
+    lr = 1e-6
+    epochs = args.epochs
+    batch_size = args.batch_size
+    n_authors = args.n_authors
+    model_path = args.model_path
+    data_path = args.data_path
+    evaluation = args.evaluation
+
     model = BertClassifier(n_authors=n_authors)
-    model.load_state_dict(torch.load(f'bert_authorship_{model._n_authors}.pt'))
-    print(f'[Model] Loading model from bert_authorship_{model._n_authors}.pt')
-    train(model, train_df, eval_df, lr, epochs, batch_size)
-    torch.save(model.state_dict(), f'bert_authorship_{model._n_authors}.pt')
-    print(f'[Model] Saving model at bert_authorship_{model._n_authors}.pt')
-    evaluate(model, test_df, batch_size)
+
+    if model_path != '.':
+        model.load_state_dict(torch.load(model_path))
+        print(f'[Model] Loading model from {model_path}')
+    else:
+        model_path = f'bert_authorship_{model._n_authors}.pt'
+
+    if not evaluation:
+        train_df, test_df, eval_df = load_data(n_authors, data_path)
+        train(model, train_df, eval_df, lr, epochs, batch_size, model_path)
+        torch.save(model.state_dict(), model_path)
+        print(f'[Model] Saving model at {model_path}')
+        evaluate(model, test_df, batch_size)
+    else:
+        data_df = pd.read_csv(data_path, index_col=0)
+        evaluate(model, data_df, batch_size)
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--epochs', default=20, type=int)
+    parser.add_argument('--batch_size', default=8, type=int)
+    parser.add_argument('--n_authors', default=2, type=int)
+    parser.add_argument('--model_path', default='.', type=str)
+    parser.add_argument('--data_path', default='./', type=str)
+    parser.add_argument('--evaluation', default=False, type=bool)
+    args = parser.parse_args()
+    main(args)

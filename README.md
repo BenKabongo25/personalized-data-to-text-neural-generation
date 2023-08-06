@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Dans ce stage, effectué au MLIA/ISIR, nous nous intéressons au **data-to-text**, un domaine du traitement automatique des langues où la tâche consiste à générer des phrases en langage naturel à partir de données structurées ou semi-structurées. 
+Dans ce stage, effectué au sein de l'équipe MLIA du laboratoire ISIR, nous nous intéressons au data-to-text, un domaine du traitement automatique des langues où la tâche consiste à générer des phrases en langage naturel à partir de données structurées ou semi-structurées. 
 
 L'objectif du stage est de développer un système neuronal de conversion de données en texte capable de personnaliser la génération de texte. 
 
@@ -18,6 +18,7 @@ L'objectif du stage est de développer un système neuronal de conversion de don
   - *xi* : données (semi-)structurées
   - *ui* : informations sur l’utilisateur
   - *yi* : description textuelle personnalisée pour *ui* de l’exemple *xi*
+    
 *Il n’existe pas de dataset de data-to-text personnalisé.*
 
 ### Apports
@@ -43,15 +44,15 @@ Voici les étapes à suivre pour la création automatique d'un dataset de data-t
 - **Sortie** : Dataset de data-to-text personnalisé.
   L'idée est de dériver pour chaque exemple non personnalisé *(xi, yi)* un exemple personnalisé *(xi, u, yui)* pour chaque utilisateur *u*.
 
-Ensuite, il faut faire du transfert de style non supervisé. Notre choix sur le modèle de transfert de style non supervisé s'est porté sur le modèle **STRAP** présenté dans le papier suivant [Reformulating Unsupervised Style Transfer as Paraphrase Generation](https://arxiv.org/abs/2010.05700). 
+Ensuite, il faut faire du transfert de style non supervisé. Notre choix s'est porté sur un modèle de transfert de style non supervisé, le modèle **STRAP**, présenté dans le papier suivant [Reformulating Unsupervised Style Transfer as Paraphrase Generation](https://arxiv.org/abs/2010.05700). 
 
-Vous pouvez dès à présent accéder au repository github associé depuis l'adresse suivante : https://github.com/martiansideofthemoon/style-transfer-paraphrase/tree/master
+Vous pouvez également accéder au repository github associé depuis l'adresse suivante : https://github.com/martiansideofthemoon/style-transfer-paraphrase/tree/master
 
 Ils décrivent les étapes nécessaires au fine-tuning d'un modèle GPT-2 sur vos données. Une fois le modèle appris, vous pourrez l'utiliser pour dériver pour chaque utilisateur une description personnalisée depuis les descriptions non personnalisées de votre dataset de data-to-text.
 
-Voici cependant quelques indications :
+Voici quelques indications d'utilisation :
 
-- Installez le repository :
+- Récupérez le repository :
   ```
   git clone https://github.com/martiansideofthemoon/style-transfer-paraphrase.git
   ```
@@ -64,7 +65,7 @@ Voici cependant quelques indications :
   cd fairseq
   pip install --editable .
   ```
-- Ensuite, il faut mettre le jeu de données des textes des utilisateurs sous le format STRAP.
+- Ensuite, il faut mettre votre jeu de données des textes des utilisateurs sous le format STRAP.
   - Diviser le jeu de données en ensembles d'apprentissage (`train`), test (`test`) et évaluation (`dev`)
   - Pour chaque ensemble, créer les fichiers d'exemples et de label (`train.txt`, `train.label`, ...) en respectant la consinge d'un exemple par ligne et que chaque fichier *.txt* et *.label* doivent avoir le même nombre de lignes.
   - Le format des fichiers *.txt* doit ainsi être le suivant :
@@ -77,7 +78,7 @@ Voici cependant quelques indications :
   - Le format des fichiers *.label* doit ainsi être le suivant :
     ```
     auteur du texte 1
-    auteur du texte 1
+    auteur du texte 2
     ...
     auteur du texte N
     ```
@@ -85,12 +86,52 @@ Voici cependant quelques indications :
 - La suite des étapes pour entraîner votre modèle de transfert de style par génération de paraphrase avec STRAP est ainsi décrite ici : https://github.com/martiansideofthemoon/style-transfer-paraphrase/tree/master#custom-datasets
 
 A la fin, vous obtenez un modèle capable de paraphraser n'importe quelle phrase avec les styles pour lesquels il a été entraînés.
-Les auteurs de STRAP mettent également à disposition différents outils d'évalutaion de la méthode.
+Les auteurs de STRAP mettent également à disposition différents outils d'évalutaion.
 
-### Cas concret
+### Mise en application
 
 Dans notre cas, nous avons utilisé le modèle STRAP pour entraîner pour quelques utilisateurs du dataset Rotten Tomatoes des modèles de génération paraphrases.
 
+Vous pouvez ainsi retrouver dans le dossier [Code/src/style_transfer](Code/src/style_transfer) tous les utilitaires nécessaires à la génération de descriptions personnalisées par utilisateur ainsi que des utilitaires d'évaluation.
+
+#### Génération des descriptions textuelles personnalisées
+Une fois le modèle entraîné, nous générons pour notre dataset de data-to-text les descriptions personnalisées pour l'utilisateur associé au modèle.
+
+```
+python paraphraser.py\
+  --model_dir [MODEL_PATH]\
+  --top_p_value [TOP_P_VALUE]\
+  --n_samples [N_SAMPLES]\
+  --input_dataset_path [DATA_TO_TEXT_DATASET_PATH]\
+  --input_feature_name [FEATURE_NAME]\
+  --output_dataset_path [OUTPUT_DATASET_PATH]
+```
+
+- MODEL_PATH : contient le modèle fine-tuné de STRAP pour un utilisateur.
+- TOP_P_VALUE : compris entre 0 et 1, est un hyper-paramètre STRAP qui fait varier l'aléatoire dans la génération. D  ns le papier STRAP, les valeurs couramment utilisées sont 0.0, 0.6 et 0.9.
+- N_SAMPLES : le nombre de texte à générer pour chaque exemple.
+- DATA_TO_TEXT_DATASET_PATH : le chemin vers votre dataset de data-to-text (sous format .csv).
+- FEATURE_NAME : la colonne de votre dataset à paraphraser : il s'agit de la colonne de description textuelle non personnalisée de votre dataset.
+- OUTPUT_DATASET_PATH : le chemin du jeu de données de sorties, qui renvoie pour chaque exemple de description non personnalisée, *N_SAMPLES* de descriptions personnalisées pour l'utilisateur du modèle.
+
+#### Evaluation
+
+Les auteurs de STRAP mettent à disposition différents outils et métriques d'évaluation du transfert de style. Nous les utilisons, en plus d'autres procédures d'évaluation.
+
+#### Similarité
+Les auteurs de STRAP utilisent la métrique de similarité proposée par [Wieting et al. 2019](https://aclanthology.org/P19-1427/).
+Vous pouvez accéder au code pour la similarité avec STRAP [ici](https://github.com/martiansideofthemoon/style-transfer-paraphrase/tree/master/style_paraphrase/evaluation/similarity).
+
+Nous mettons à disposition un script d'évaluation de transfert de style en utilisant cette métrique de similarité.
+Vous pouvez y accéder depuis [Code/src/style_transfer/similarity_eval.py](Code/src/style_transfer/similarity_eval.py)
+
+Voici comment lancer le script :
+```
+python similarity_eval.py --data_path [OUTPUT_DATASET_PATH]
+```
+
+#### Authorship attribution
+Pour entraîner des modèles d'attribution d'auteur et évaluer le transfert de style, nous proposons d'utiliser BERT. La section suivante explique en détails l'utilisation du modèle proposé.
 
 ## Authorship attribution
 

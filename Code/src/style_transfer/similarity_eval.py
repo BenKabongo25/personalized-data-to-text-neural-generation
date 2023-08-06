@@ -50,10 +50,7 @@ def find_similarity(s1, s2):
         return [x.item() for x in scores]
 
 
-def main(data_df):
-    inputs = data_df['input'].tolist()
-    outputs = data_df['outputs'].tolist()
-
+def main(inputs, outputs):
     all_similarity = []
 
     print("Compute similarity ...")
@@ -70,13 +67,21 @@ def main(data_df):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_path", required=True, type=str)
+    parser.add_argument("--input_feature", default="input", type=str)
+    parser.add_argument("--output_feature", default="outputs", type=str)
     args = parser.parse_args()
 
     data_df = pd.read_csv(args.data_path, index_col=0)
-    data_df["outputs"] = data_df["outputs"].apply(ast.literal_eval)
+    try: 
+        data_df[args.output_feature] = data_df[args.output_feature].apply(ast.literal_eval)
+    except:
+        data_df[args.output_feature] = data_df[args.output_feature].apply(lambda x: [str(x)])
+
+    inputs = data_df[args.input_feature].apply(str).tolist()
+    outputs = data_df[args.output_feature].tolist()
 
     with open("similarity_res.txt", "a") as f:
         f.write(f"{args.data_path} : ")
 
-    main(data_df)
+    main(inputs, outputs)
 

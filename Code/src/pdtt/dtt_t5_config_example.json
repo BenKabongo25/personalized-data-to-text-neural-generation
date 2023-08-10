@@ -1,0 +1,10 @@
+{
+    "data_to_text_path": "../../Data/appdata/rotten/wikiroto_all.csv",
+    "users" : [
+        {
+            "userid": 0,
+            "username": "Dennis_Schwartz",
+            "user_data_path": "../../Data/appdata/rotten/Dennis_Schwartz_p_09.csv"
+        }
+    ]
+}

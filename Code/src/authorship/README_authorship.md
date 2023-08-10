@@ -4,8 +4,6 @@ Afin d'évaluer la qualité de la personnalisation pour les différentes étapes
 de data-to-text personnalisé, une des métriques que nous utilisons est l'accuracy donnée par un modèle fine-tuné 
 de BERT qui fait de la classification des auteurs.
 
-Le code du modèle est accessible ici [authorship/bert_autorship.py](authorship/bert_autorship.py)
-
 ### Apprentissage
 Pour entraîner le modèle sur vos données, vous pouvez utiliser le script suivant :
 
@@ -29,7 +27,7 @@ python bert_authorship.py\
 Afin d'évaluer des données sur un modèle pré-entrainé, vous pouvez rajouter l'option : `--evaluation 1`.
 
 ### Clustering
-Dans [authorship/bert_cls_clustering.py](authorship/bert_cls_clustering.py) vous retrouverez du code pour faire 
+Dans [authorship/bert_cls_clustering.py](bert_cls_clustering.py) vous retrouverez du code pour faire 
 du clustering des textes d'utilisateurs avec BERT.
 Vous pouvez ainsi réutiliser vos modèles pré-entraînés.
 
@@ -75,5 +73,5 @@ Voici quelques résultats du clustering sur les données de Rotten Tomatoes :
 ![Clustering sur les reviews de Rotten Tomatoes - 3 Auteurs](/Code/src/authorship/out_clustering/clustering_authors_5.png)
 
 ### Grid search avec TF-IDF
-Dans [authorship/bert_cls_clustering.py](authorship/bert_cls_clustering.py), vous retrouvez du code pour faire de la recherche
+Dans [authorship/tfidf_gridsearch.py](tfidf_gridsearch.py), vous retrouvez du code pour faire de la recherche
 exhaustive des paramètres optimaux pour la classification d'auteurs avec du TF-IDF.

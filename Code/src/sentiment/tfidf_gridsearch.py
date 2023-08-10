@@ -1,5 +1,5 @@
 # Ben Kabongo
-# Personnalized data-to-text neural generation
+# Personalized data-to-text neural generation
 # ISIR/MLIA, 2023
 
 # Sentiment analysis with TF-IDF grid search

@@ -1,3 +1,9 @@
+# Ben Kabongo
+# Personalized data-to-text neural generation
+# ISIR/MLIA, 2023
+
+# Recommender system on Rotten Tomatoes
+
 import numpy as np
 import os
 import pandas as pd

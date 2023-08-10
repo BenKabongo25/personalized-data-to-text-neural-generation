@@ -1,3 +1,9 @@
+# Ben Kabongo
+# Personalized data-to-text neural generation
+# ISIR/MLIA, 2023
+
+# Grid search for TF-IDF
+
 import json
 import nltk
 import os

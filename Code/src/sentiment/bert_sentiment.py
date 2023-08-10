@@ -1,5 +1,5 @@
 # Ben Kabongo
-# Personnalized data-to-text neural generation
+# Personalized data-to-text neural generation
 # ISIR/MLIA, 2023
 # Crédits : https://towardsdatascience.com/text-classification-with-bert-in-pytorch-887965e5820f
 

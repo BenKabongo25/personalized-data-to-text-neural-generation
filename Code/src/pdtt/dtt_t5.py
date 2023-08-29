@@ -10,17 +10,19 @@ import json
 import numpy as np
 import os
 import pandas as pd
-import sys
+import sentencepiece as spm
 import torch
+import torch.nn as nn
 
 from datetime import datetime
-from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
+from nltk.tokenize import TreebankWordTokenizer
 from parent.parent import parent
+from style_paraphrase.evaluation.similarity.sim_models import WordAveraging
+from style_paraphrase.evaluation.similarity.sim_utils import Example
 from tqdm import tqdm
 from torch.utils.data import DataLoader, Dataset
-from transformers import T5Tokenizer, T5ForConditionalGeneration
+from transformers import T5Tokenizer, T5ForConditionalGeneration, BertTokenizer, BertModel
 from transformers.optimization import Adafactor
-
 
 
 class PDTTDataset(Dataset):
@@ -55,6 +57,24 @@ class PDTTDataset(Dataset):
         )
 
 
+class BertClassifier(nn.Module):
+
+    def __init__(self, n_authors=80, dropout=0.5):
+        super(BertClassifier, self).__init__()
+        self.bert = BertModel.from_pretrained('bert-base-cased')
+        self.dropout = nn.Dropout(dropout)
+        self.linear = nn.Linear(768, n_authors)
+        self.relu = nn.ReLU()
+        self._n_authors = n_authors
+
+    def forward(self, input_id, mask):
+        _, cls_output = self.bert(input_ids= input_id, attention_mask=mask,return_dict=False)
+        dropout_output = self.dropout(cls_output)
+        linear_output = self.linear(dropout_output)
+        final_layer = self.relu(linear_output)
+        return final_layer
+
+
 def save(model, optimizer, path):
     torch.save({
         'model_state_dict': model.state_dict(),
@@ -65,6 +85,115 @@ def save(model, optimizer, path):
 def empty_cache():
     with torch.no_grad(): 
         torch.cuda.empty_cache()
+
+
+def evaluate_batch(
+        model, 
+        tokenizer, 
+        device, 
+        batch, 
+        args, 
+        authorship_model=None, 
+        authorship_tokenizer=None,
+        similarity_fn=None
+    ):
+
+    empty_cache()
+    inputs, targets, user_ids, dtt_refs, pdtt_refs, parents = batch
+    tokenized_inputs = tokenizer.batch_encode_plus(
+        inputs,
+        padding='max_length',
+        max_length=args.model_input_length,
+        truncation=True,
+        return_tensors="pt"
+    )
+
+    input_ids = tokenized_inputs["input_ids"].to(device)
+    outputs = model.generate(input_ids, max_length=args.model_output_length)
+    outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+
+    hypotheses = [h.split(' ') for h in outputs]
+    references = [[r.split(' ')] for r in targets]
+
+    #references = [[r.split(' ') for r in p] for p in pdtt_refs]
+    parent_tables = [json.loads(p) for p in parents]
+
+    all_similarity = []
+    for input, target in zip(inputs, targets):
+        similarity = similarity_fn([input], [target])
+        similarity = np.mean(similarity)
+        all_similarity.append(similarity)
+    similarity = np.mean(all_similarity)
+
+    parent_precision, parent_recall, parent_f_score = parent(
+        hypotheses,
+        references,
+        parent_tables,
+        avg_results=True,
+    )
+
+    acc = 0
+    if authorship_model is not None and authorship_tokenizer is not None:
+        bert_tokenized_inputs = [
+            authorship_tokenizer(
+                o, 
+                padding='max_length', 
+                max_length=512, 
+                truncation=True, 
+                return_tensors="pt"
+            ) for o in outputs
+        ]
+        attention_mask = torch.cat([item['attention_mask'] for item in bert_tokenized_inputs], dim=0).to(device)
+        input_ids = torch.cat([item['input_ids'] for item in bert_tokenized_inputs], dim=0).to(device)
+        authorship_outputs = authorship_model(input_ids, attention_mask)
+        acc = (authorship_outputs.argmax(dim=1).to(device) == user_ids.to(device)).sum().item()
+ 
+    return {
+        'similarity': similarity, 
+        'parent': [parent_precision, parent_recall, parent_f_score],
+        'authorship': acc,
+    }
+
+
+def evaluate(
+        model, 
+        tokenizer, 
+        device, 
+        eval_df, 
+        args,
+        authorship_model=None,
+        authorship_tokenizer=None,
+        similarity_fn=None
+    ):
+
+    eval_dt = PDTTDataset(eval_df, tokenizer, args)
+    eval_ld = DataLoader(eval_dt, batch_size=args.batch_size, shuffle=False)
+
+    similarity, parent_precision, parent_recall, parent_f_score, acc = [], [], [], [], []
+
+    with torch.no_grad():
+        for batch in tqdm(eval_ld, desc="Validation"):
+            scores = evaluate_batch(
+                model, 
+                tokenizer, 
+                device, 
+                batch, 
+                args,
+                authorship_model,
+                authorship_tokenizer,
+                similarity_fn
+            )
+            similarity.append(scores['similarity'])
+            parent_precision.append(scores['parent'][0])
+            parent_recall.append(scores['parent'][1])
+            parent_f_score.append(scores['parent'][2])
+            acc.append(scores['authorship'])
+
+    return {
+        'similarity': np.mean(similarity),
+        'parent': [np.mean(parent_precision), np.mean(parent_recall), np.mean(parent_f_score)],
+        'authorship': np.mean(acc)
+    }
 
 
 def train_batch(model, tokenizer, optimizer, device, batch, args):
@@ -104,15 +233,27 @@ def train_batch(model, tokenizer, optimizer, device, batch, args):
     return running_loss
 
 
-def train(model, tokenizer, optimizer, device, train_df, eval_df, args):
+def train(
+        model, 
+        tokenizer, 
+        optimizer, 
+        device, 
+        train_df, 
+        eval_df, 
+        args, 
+        authorship_model=None, 
+        authorship_tokenizer=None,
+        similarity_fn=None
+    ):
+
     print('Training ...')
     train_dt = PDTTDataset(train_df, tokenizer, args)
     train_ld = DataLoader(train_dt, batch_size=args.batch_size, shuffle=True)
 
     for epoch in range(args.epochs):
         model.train()
-        running_loss = .0
 
+        running_loss = .0
         for batch in tqdm(train_ld, desc=f"Epochs {epoch} / {args.epochs}"):
             loss = train_batch(model, tokenizer, optimizer, device, batch, args)
             running_loss += loss
@@ -122,61 +263,17 @@ def train(model, tokenizer, optimizer, device, train_df, eval_df, args):
         save(model, optimizer, args.model_path)
 
         model.eval()
-        scores = evaluate(model, tokenizer, device, eval_df, args)
+        scores = evaluate(
+            model, 
+            tokenizer, 
+            device, 
+            eval_df, 
+            args, 
+            authorship_model,
+            authorship_tokenizer,
+            similarity_fn
+        )
         print(f"[Evaluation] scores = {scores}")
-
-
-def evaluate_batch(model, tokenizer, device, batch, args):
-    empty_cache()
-    inputs, targets, user_ids, dtt_refs, pdtt_refs, parents = batch
-    tokenized_inputs = tokenizer.batch_encode_plus(
-        inputs,
-        padding='max_length',
-        max_length=args.model_input_length,
-        truncation=True,
-        return_tensors="pt"
-    )
-
-    input_ids = tokenized_inputs["input_ids"].to(device)
-    outputs = model.generate(input_ids, max_length=args.model_output_length)
-    outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-
-    hypotheses = [h.split(' ') for h in outputs]
-    references = [[r.split(' ') for r in p] for p in pdtt_refs]
-    parent_tables = [json.loads(p) for p in parents]
-
-    bleu = corpus_bleu(references, hypotheses,
-                       smoothing_function=SmoothingFunction().method4)
-    parent_precision, parent_recall, parent_f_score = parent(
-        hypotheses,
-        references,
-        parent_tables,
-        avg_results=True,
-    )
- 
-    return {
-        'bleu': bleu, 
-        'parent': [parent_precision, parent_recall, parent_f_score]
-    }
-
-
-def evaluate(model, tokenizer, device, eval_df, args):
-    eval_dt = PDTTDataset(eval_df, tokenizer, args)
-    eval_ld = DataLoader(eval_dt, batch_size=args.batch_size, shuffle=False)
-
-    bleu, parent_precision, parent_recall, parent_f_score = [], [], [], []
-
-    for batch in tqdm(eval_ld, desc="Validation"):
-        scores = evaluate_batch(model, tokenizer, device, batch, args)
-        bleu.append(scores['bleu'])
-        parent_precision.append(scores['parent'][0])
-        parent_recall.append(scores['parent'][1])
-        parent_f_score.append(scores['parent'][2])
-
-    return {
-        'bleu': np.mean(bleu),
-        'parent': [np.mean(parent_precision), np.mean(parent_recall), np.mean(parent_f_score)]
-    }
 
 
 def load_data(args):
@@ -265,14 +362,72 @@ def main(args):
         args.model_path = f"{model_dir}/model.pt"
     print('[Model] Model loaded')
 
-    train(model, tokenizer, optimizer, device, train_df, eval_df, args)
+    authorship_model = None
+    authorship_tokenizer = None
+    if args.authorship_model_path != "":
+        print(f'[Authorship Model] Loading model from {args.authorship_model_path}')
+        authorship_model = BertClassifier(n_authors=args.authorship_n_authors)
+        authorship_model.load_state_dict(torch.load(args.authorship_model_path))
+        authorship_model.to(device)
+        authorship_tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
+        print(f'[Authorship Model] Model loaded')
+
+    def fn(*args):
+        return 0
+    similarity_fn = fn 
+
+    if args.similarity_path != "":
+        tok = TreebankWordTokenizer()
+
+        sim_model = torch.load(args.similarity_path + 'sim.pt')
+        state_dict = sim_model['state_dict']
+        vocab_words = sim_model['vocab_words']
+        sim_model_args = sim_model['args']
+
+        sim_model = WordAveraging(sim_model_args, vocab_words)
+        sim_model.load_state_dict(state_dict, strict=True)
+        sp = spm.SentencePieceProcessor()
+        sp.Load(args.similarity_path + 'sim.sp.30k.model')
+        sim_model.eval()
+
+        def make_example(sentence, sim_model):
+            sentence = sentence.lower()
+            sentence = " ".join(tok.tokenize(sentence))
+            sentence = sp.EncodeAsPieces(sentence)
+            wp1 = Example(" ".join(sentence))
+            wp1.populate_embeddings(sim_model.vocab)
+            return wp1
+
+        def find_similarity(s1, s2):
+            with torch.no_grad():
+                s1 = [make_example(x, sim_model) for x in s1]
+                s2 = [make_example(x, sim_model) for x in s2]
+                wx1, wl1, wm1 = sim_model.torchify_batch(s1)
+                wx2, wl2, wm2 = sim_model.torchify_batch(s2)
+                scores = sim_model.scoring_function(wx1, wm1, wl1, wx2, wm2, wl2)
+                return [x.item() for x in scores]
+
+        similarity_fn = find_similarity
+
+    train(
+        model, 
+        tokenizer, 
+        optimizer, 
+        device, 
+        train_df, 
+        eval_df, 
+        args, 
+        authorship_model,
+        authorship_tokenizer,
+        similarity_fn
+    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--model_input_length', default=2_000, type=int)
-    parser.add_argument('--model_output_length', default=1_000, type=int)
+    parser.add_argument('--model_input_length', default=1024, type=int)
+    parser.add_argument('--model_output_length', default=512, type=int)
 
     parser.add_argument('--input_col', default='input', type=str)
     parser.add_argument('--user_id_col', default='user_id', type=str)
@@ -289,6 +444,11 @@ if __name__ == "__main__":
 
     parser.add_argument('--model_name', default='t5-small', type=str)
     parser.add_argument('--model_path', default='', type=str)
+
+    parser.add_argument('--authorship_model_path', default="", type=str)
+    parser.add_argument('--authorship_n_authors', default=2, type=int)
+
+    parser.add_argument('--similarity_path', default='style_paraphrase/evaluation/similarity/sim/', type=str)
 
     args = parser.parse_args()
     main(args)
